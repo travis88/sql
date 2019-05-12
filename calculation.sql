@@ -392,7 +392,7 @@ BEGIN
 			_n_payout numeric(10, 2), -- сумма на выплату
 			_n_prev_payout numeric(10, 2), -- сумма на выплату в предыдущем расчёте
 --			_n_subsidy_tt numeric(10, 2), -- размер субсидии на твёрдое топливо
-			_n_subsidy_main_tt numeric(10, 2) -- единовременная выплата по тт
+			n_subsidy_main_tt numeric(10, 2) -- единовременная выплата по тт
 		) ON COMMIT DROP;
 		DELETE FROM _periods;
 
@@ -454,7 +454,7 @@ BEGIN
 			  LEFT JOIN LATERAL(SELECT *
 				  				FROM subsidy.cd_cases_ghku
 				  				WHERE f_case = _case
-				  					  AND n_year * 100 + f_month = date_part('year', rec.d_date - '1 mons'::INTERVAL) * 100 + date_part('month', rec.d_date - '1 mons'::INTERVAL)
+				  					  AND n_year * 100 + f_month = date_part('year', rec._d_date - '1 mons'::INTERVAL) * 100 + date_part('month', rec._d_date - '1 mons'::INTERVAL)
 				  				ORDER BY b_last DESC
 				  				LIMIT 1) AS g ON TRUE	
 			  LEFT JOIN LATERAL(SELECT *
@@ -600,7 +600,7 @@ BEGIN
 				 _n_fuel_payment,
 				 _n_fuel_discount,
 				 _n_fact_payment_year
-			FROM subsidy.cd_case AS d 
+			FROM subsidy.cd_cases AS d 
 			LEFT JOIN subsidy.cd_cases_ghku AS g ON d.id = g.f_case
 			LEFT JOIN subsidy.cd_cases_ghku_periods AS p ON p.f_case_ghku = g.id
 			LEFT JOIN subsidy.cs_ghku_types AS t ON p.f_type = t.id
@@ -630,12 +630,12 @@ BEGIN
 			_n_volume := _n_volume + _n_prev_rest_volume;
 		
 			-- фактические расходы на оплату жку
-			SELECT CASE t.b_owner 
+			SELECT sum(CASE t.b_owner 
 						WHEN TRUE THEN ((p.n_sum::NUMERIC(10, 2) - p.n_discount::NUMERIC(10, 2)) * _n_owners_share)::NUMERIC(10, 2)
 						WHEN FALSE THEN (((p.n_sum::NUMERIC(10, 2) - p.n_discount::NUMERIC(10, 2)) / (rec._n_count_location + rec._n_count_place_stay)::numeric(10, 2))
 											* (_count_location + _count_place_stay))::NUMERIC(10, 2)
 						ELSE g.n_total - g.n_discount
-					END,
+					END),
 					g.id
 			INTO _n_fact_payment,
 				_n_last_ghku
@@ -774,14 +774,14 @@ BEGIN
 					END IF;
 				END IF;
 			
-				UPDATE _periods AS p
-				SET p._n_subsidy = COALESCE(_n_subsidy_tt, 0),
-					p._n_payout = CASE 
+				UPDATE _periods
+				SET _n_subsidy = COALESCE(_n_subsidy_tt, 0),
+					_n_payout = CASE 
 									 WHEN COALESCE(_n_subsidy_tt, 0) < 0 THEN 0
 									 ELSE COALESCE(_n_subsidy_tt, 0)
 	 							END,
-					 p._n_subsidy_main_tt = COALESCE(_n_subsidy_main_tt, 0)
-				WHERE p.id = rec_tt._id; 
+					 n_subsidy_main_tt = COALESCE(_n_subsidy_main_tt, 0)
+				WHERE _id = rec_tt._id; 
 			END LOOP;
 										
 	   		--======================================================================--
@@ -790,7 +790,7 @@ BEGIN
 			UPDATE _periods
 			SET _n_subsidy = (_n_subsidy / _number_of_days::decimal) * _date_diff,
 				_n_payout = (_n_payout / _number_of_days::decimal) * _date_diff,
-				_n_subsidy_main_tt = (_n_subsidy_main_tt / _number_of_days::decimal) * _date_diff;
+				n_subsidy_main_tt = (n_subsidy_main_tt / _number_of_days::decimal) * _date_diff;
 			
 			--======================================================================--
 			--                     ЕДИНОВРЕМЕННАЯ ВЫПЛАТА ПО ТТ                     --
@@ -805,7 +805,7 @@ BEGIN
 				END IF;
 				
 				INSERT INTO subsidy.cd_calculation_periods(f_calculation, d_begin, d_end, n_subsidy, n_payout, b_solid_fuel)
-				SELECT _calc, _begin, _end_tt, sum(p._n_subsidy_main_tt), sum(p._n_subsidy_main_tt), TRUE
+				SELECT _calc, _begin, _end_tt, sum(n_subsidy_main_tt), sum(n_subsidy_main_tt), TRUE
 				FROM _periods;
 			END IF;
 		
@@ -852,33 +852,33 @@ BEGIN
 	-- 	       		             ПРОТОКОЛ                                   --
 	--======================================================================--
 	IF _b_enabled = TRUE THEN -- массовый перерасчёт
-		_c_header := 'ПРОТОКОЛ ПЕРЕРАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖКУ И КОММУНАЛЬНЫХ УСЛУГ' || _br
+		_c_header := 'ПРОТОКОЛ ПЕРЕРАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖКУ И КОММУНАЛЬНЫХ УСЛУГ ' 
 					 || CASE _f_calculation_type 
-							WHEN 3 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СТАНДАРТА СТОИМОСТИ ЖКУ' || _br
-							WHEN 4 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ ПРОЖИТОЧНОГО МИНИМУМА' || _br
-							WHEN 5 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СТАНДАРТА СТОИМОСТИ ЖКУ И ПРОЖИТОЧНОГО МИНИМУМА' || _br
+							WHEN 3 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СТАНДАРТА СТОИМОСТИ ЖКУ' 
+							WHEN 4 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ ПРОЖИТОЧНОГО МИНИМУМА' 
+							WHEN 5 THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СТАНДАРТА СТОИМОСТИ ЖКУ И ПРОЖИТОЧНОГО МИНИМУМА'
 							ELSE ''
 						END;
 	ELSIF _b_sampled_recalculated = TRUE THEN -- выборочный перерасчёт
-		_c_header := 'ПРОТОКОЛ ПЕРЕРАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖКУ И КОММУНАЛЬНЫХ УСЛУГ' || _br
+		_c_header := 'ПРОТОКОЛ ПЕРЕРАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖКУ И КОММУНАЛЬНЫХ УСЛУГ '
 					 || CASE _c_recalculation_reason_alias 
-							WHEN 'ending_payment_period' THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СУММЫ НАЧИСЛЕНИЙ ЗА ЖКУ' || _br
+							WHEN 'ending_payment_period' THEN 'В СВЯЗИ С ИЗМЕНЕНИЕМ СУММЫ НАЧИСЛЕНИЙ ЗА ЖКУ'
 							ELSE ''
 						END;
 	ELSE
-		_c_header := 'ПРОТОКОЛ РАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖИЛОГО ПОМЕЩЕНИЯ И КОММУНАЛЬНЫХ УСЛУГ' || _br;
+		_c_header := 'ПРОТОКОЛ РАСЧЁТА СУБСИДИИ НА ОПЛАТУ ЖИЛОГО ПОМЕЩЕНИЯ И КОММУНАЛЬНЫХ УСЛУГ';
 	END IF;
+	_c_header := common.centered_text(_c_header || ' ' || public.get_russian_date(_date_recalculation), _max_length);
 
-	_c_header := _c_header || public.get_russian_date(_date_recalculation) || _br
-						   || '№ личного дела: ' || COALESCE(_с_case_number, '') || _br
-						   || 'ФИО заявителя: ' || COALESCE(_с_declarant, '') || _br
-						   || 'Дата обращения: ' || COALESCE(public.get_russian_date(_date_calculation), '')
+	_c_header := _c_header || common.to_left('№ личного дела: ' || COALESCE(_с_case_number, ''), _max_length) || _br
+						   || common.to_left('ФИО заявителя: ' || COALESCE(_с_declarant, ''), _max_length) || _br
+						   || common.to_left('Дата обращения: ' || COALESCE(public.get_russian_date(_date_calculation), ''), _max_length)
 						   || _с_divider
-						   || 'Адрес: ' || COALESCE(_с_address, '') || _br
-						   || 'Балансодержатель: ' || COALESCE(_c_balance_holder, '') || _br
-						   || 'Жилищный фонд: ' || COALESCE(_с_housing_stock_type, '') || _br
-						   || 'Вид дома: ' || COALESCE(_c_ownership_type, '') || _br
-						   || 'Взносы на кап. рем.: ' || COALESCE(_c_capital_repair, '') 
+						   || common.to_left('Адрес: ' || COALESCE(_с_address, ''), _max_length) || _br
+						   || common.to_left('Балансодержатель: ' || COALESCE(_c_balance_holder, ''), _max_length) || _br
+						   || common.to_left('Жилищный фонд: ' || COALESCE(_с_housing_stock_type, ''), _max_length) || _br
+						   || common.to_left('Вид дома: ' || COALESCE(_c_ownership_type, ''), _max_length) || _br
+						   || common.to_left('Взносы на кап. рем.: ' || COALESCE(_c_capital_repair, ''), _max_length) 
 						   || _с_divider;
 	
 	
