@@ -5,23 +5,21 @@ AS $function$
 DECLARE res CHARACTER VARYING := ''; -- результат
 		pref_len integer := length(prefix); -- длина префикса
 		str_len integer := length(str); -- длина строки
-		_str CHARACTER VARYING := prefix || str; -- редактируемая строка
-		_res_counter CHARACTER VARYING := ''; -- конкатенируемая строка для проверки
+		_str CHARACTER VARYING := str; -- редактируемая строка
 		_counter integer := 0; -- счётчик
 BEGIN
 	IF pref_len + str_len > max_length THEN
 		LOOP 
 			_str := (SELECT common.split_string(_str, max_length - pref_len, FALSE));
-			_res_counter := _res_counter || _str;
-			res := res || _str || chr(10);
-			
-			IF length(_res_counter) >= pref_len + str_len THEN
-				EXIT;
+			IF _counter > 0 THEN
+				prefix := lpad('', pref_len, ' ');
 			END IF;
 			_counter := _counter + length(_str);
-			_str := ltrim(RIGHT(prefix || str, length(prefix || str) - length(_res_counter)));
---			_str := ltrim(RIGHT(str, length(str) - length(_res_counter) - pref_len));
-			_str := rpad(lpad(_str, pref_len + length(_str), ' '), max_length, ' ');
+			res := res || prefix || trim(_str) || chr(10);
+			_str := right(str, str_len - _counter);
+			IF _counter >= str_len THEN
+				EXIT;
+			END IF;
 		END LOOP;
 	ELSE 
 		res := rpad(COALESCE(prefix || str, ' '), max_length);
