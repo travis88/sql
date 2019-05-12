@@ -23,12 +23,34 @@ DECLARE rec record; -- итерация цикла
 		_average_month_income numeric(10, 2); -- среднемесячный совокупный доход семьи в расчётном периоде
 		_percapita_income numeric(10, 2); -- среднедушевой доход семьи в расчётном периоде
 		_n_republic_area numeric(10, 2) := 0; -- социальная норма площади жилого помещения
+		
+		--+++++++++++++++++++++++++--
+		--     ТВЁРДОЕ ТОПЛИВО     --
+		--+++++++++++++++++++++++++--
+		_n_annual_volume NUMERIC; -- годовой объём твёрдого топлива
+		_n_months NUMERIC(10, 4); -- кол-во месяцев по нормативу
+		_n_fact_payment_year NUMERIC(10, 2); -- размер фактических расходов на оплату ТТ с учётом льгот 
+		_n_fact_payment_month NUMERIC(10, 2); -- размер среднемесячных расходов на оплату тт с учётом льгот
+		_n_rest_volume NUMERIC; -- неиспользованный остаток
+		_n_normative_cost NUMERIC; -- нормативные расходы
+		
+		_n_owners_share numeric; -- общая доля всех собственников
+		_n_normative_year numeric; -- норматив потребления ТТ на год
+		_n_volume numeric; -- приобретённый объем твёрдого топлива
+		_n_fuel_payment numeric(10, 2); -- фактические расходы на твёрдое топливо
+		_n_fuel_discount numeric(10, 2); -- льгота на оплату твёрдого топлива
+		_n_fact_payment numeric(10, 2); -- фактические расходы на оплату жку
+		_n_last_ghku uuid; -- последний период жку тт
+		
+		_n_prev_rest_volume numeric; -- предыдущий остаток тт
+		_n_prev_fact_payment NUMERIC(10, 2); -- предыдущие фактические расходы на жку
+		_n_prev_annual_volume_sf NUMERIC; -- предыдущий приобретённый объём твёрдого топлива
 
 		--+++++++++++++++++++++++++--
 		--         протокол        --
 		--+++++++++++++++++++++++++--
 		_br CHARACTER VARYING := chr(10); -- перенос на новую строку
-		_с_divider CHARACTER VARYING := _br || ' -----------------------------------------------------------------------------------------------' || _br; -- разделитель
+		_с_divider CHARACTER VARYING := _br || lpad('', 80, '-') || _br; -- разделитель
 		_с_case_number CHARACTER VARYING; -- номер дела
 		_date_recalculation date; -- дата расчёта
 		_с_declarant CHARACTER VARYING; -- заявитель
@@ -123,6 +145,7 @@ BEGIN
 	CREATE TEMP TABLE _calculations
 	(
 		_id uuid, -- идентификатор
+		_n_number integer, -- номер
 		_d_date date, -- дата заявления
 		_n_count_location integer, -- кол-во пмж
 		_n_count_place_stay integer, -- кол-во пмп
@@ -144,6 +167,7 @@ BEGIN
 	DELETE FROM _calculations;
 
 	INSERT INTO _calculations(_id, 
+							  _n_number,
 							  _d_date, 
 							  _n_count_location, 
 							  _n_count_place_stay, 
@@ -162,6 +186,7 @@ BEGIN
 							  _n_rest_volume_solid_fuel,
 							  _n_normative_costs_solid_fuel)
 	SELECT r.id, 
+		   r.n_number,
 		   r.d_date, 
 		   r.n_count_location, 
 		   r.n_count_place_stay, 
@@ -207,7 +232,8 @@ BEGIN
 		DELETE FROM _people;
 		
 		INSERT INTO _people(_row_count,
-							_id, _person, 
+							_id, 
+							_person, 
 							_registration_alias, 
 							_sdg_alias, 
 							_family_rel,
@@ -284,7 +310,7 @@ BEGIN
 							/ _count_family_members::numeric, 0)
 		INTO _average_month_income
 		FROM _people
-		WHERE _calculation = _calc;
+		WHERE _calculation = rec._id;
 		-- среднедушевой доход семьи в расчётном периоде
 		_percapita_income := _average_month_income / _count_location::numeric;
 
@@ -377,9 +403,15 @@ BEGIN
 			   p._d_begin,
 			   p._d_end,
 			   l.d_begin,
-			   case when l.d_end < _begin then null else l.d_end end,
+			   CASE 
+			   	WHEN l.d_end < _begin THEN NULL 
+			   	ELSE l.d_end 
+			   END,
 			   s.d_begin,
-			   case when s.d_end < _begin then null else s.d_end end,
+			   CASE 
+			   	WHEN s.d_end < _begin 
+			   	THEN NULL ELSE s.d_end 
+			   END,
 	   		   g.n_total,
 	   		   gs.n_total,
 	   		   COALESCE(prev_calc.n_payout, 0)
@@ -407,7 +439,7 @@ BEGIN
 			  LEFT JOIN LATERAL(SELECT *
 				  				FROM subsidy.cd_cases_ghku
 				  				WHERE f_case = _case
-				  					  AND n_year * 100 + f_month = date_part('year', _begin - '1 mons'::INTERVAL) * 100 + date_part('month', _begin - '1 mons'::INTERVAL)
+				  					  AND n_year * 100 + f_month = date_part('year', rec.d_date - '1 mons'::INTERVAL) * 100 + date_part('month', rec.d_date - '1 mons'::INTERVAL)
 				  				ORDER BY b_last DESC
 				  				LIMIT 1) AS g ON TRUE	
 			  LEFT JOIN LATERAL(SELECT *
@@ -420,7 +452,7 @@ BEGIN
 			  				    FROM subsidy.cd_calculation_periods AS per
 			  				    INNER JOIN subsidy.cd_calculations AS r ON per.f_calculation = r.id
 			  				    WHERE r.f_case = _case
-			  				    	  AND per.f_calculation != _calc
+			  				    	  AND per.f_calculation != rec._id
 			  				    	  AND per.b_payout = TRUE
 			  				    	  AND r.b_enabled = FALSE
 			  				    	  AND date_part('year', per.d_begin) * 100 + date_part('month', per.d_begin) 
@@ -540,6 +572,117 @@ BEGIN
 		UPDATE _periods
 		SET _n_subsidy = (_n_subsidy / _number_of_days::decimal) * _date_diff,
 			_n_payout = (_n_payout / _number_of_days::decimal) * _date_diff;
+		
+		--======================================================================--
+		--                             ТВЁРДОЕ ТОПЛИВО
+		--======================================================================--
+		SELECT sum(_owner_share)
+		INTO _n_owners_share -- общая доля собственности
+		FROM _people;
+	
+		SELECT n.n_year,
+			   p.n_scope,
+			   p.n_sum,
+			   p.n_discount,
+			   COALESCE(p.n_sum, 0) - COALESCE(p.n_discount, 0)
+		INTO _n_normative_year,
+			 _n_volume,
+			 _n_fuel_payment,
+			 _n_fuel_discount,
+			 _n_fact_payment_year
+		FROM subsidy.cd_case AS d 
+		LEFT JOIN subsidy.cd_cases_ghku AS g ON d.id = g.f_case
+		LEFT JOIN subsidy.cd_cases_ghku_periods AS p ON p.f_case_ghku = g.id
+		LEFT JOIN subsidy.cs_ghku_types AS t ON p.f_type = t.id
+		LEFT JOIN subsidy.cs_solid_fuel_normatives AS n ON t.id = n.f_type
+		WHERE d.id = _case
+			  AND date_part('year', rec._d_date) * 100 + date_part('month', rec._d_date) 
+			  		= g.n_year * 100 + g.f_month
+			  AND t.c_code LIKE '37%'
+		ORDER BY g.b_last DESC
+		LIMIT 1;
+
+		SELECT coalesce(r.n_rest_volume_sf, 0), 
+			   coalesce(r.n_fact_payment_year_sf, 0), 
+			   coalesce(r.n_annual_volume_solid_fuel, 0)
+		INTO _n_prev_rest_volume, 
+		     _n_prev_fact_payment,
+		     _n_prev_annual_volume_sf
+		FROM subsidy.cd_calculations AS r 
+		INNER JOIN subsidy.cs_subsidy_types AS t ON r.f_subsidy_type = t.id
+		WHERE r.f_case = _case
+			  AND r.n_number < rec._n_number
+			  AND t.c_alias = 'tt'
+		ORDER BY r.n_number DESC
+		LIMIT 1;
+		
+		-- объем твёрдого топлива
+		_n_volume := _n_volume + _n_prev_rest_volume;
+	
+		-- фактические расходы на оплату жку
+		SELECT CASE t.b_owner 
+					WHEN TRUE THEN (p.n_sum::NUMERIC(10, 2) * _n_owners_share)::NUMERIC(10, 2)
+					WHEN FALSE THEN ((p.n_sum::NUMERIC(10, 2) / (rec._n_count_location + rec._n_count_place_stay)::numeric(10, 2))
+										* (_count_location + _count_place_stay))::NUMERIC(10, 2)
+					ELSE g.n_total
+				END,
+				g.id
+		INTO _n_fact_payment,
+			_n_last_ghku
+		FROM subsidy.cd_cases_ghku AS g
+		LEFT JOIN subsidy.cd_cases_ghku_periods AS p ON g.id = p.f_case_ghku
+		LEFT JOIN subsidy.cs_ghku_types AS t ON p.f_type = t.id
+		WHERE g.f_case = _case 
+			  AND (t.c_code NOT LIKE '37%' AND t.c_code NOT LIKE '00%')
+			  AND date_part('year', (_date_calculation - '1 mons'::INTERVAL)::date) * 100 + date_part('month', (_date_calculation - '1 mons'::INTERVAL)::date) 
+			  		= g.n_year * 100 + g.f_month
+		GROUP BY g.id, g.n_year, g.f_month, g.b_last	  		
+		ORDER BY g.b_last DESC
+		LIMIT 1;
+		
+--		_n_annual_volume NUMERIC; -- годовой объём твёрдого топлива
+--		_n_months NUMERIC(10, 4); -- кол-во месяцев по нормативу
+--		_n_fact_payment_month NUMERIC(10, 2); -- размер среднемесячных расходов на оплату тт с учётом льгот
+--		_n_rest_volume NUMERIC; -- неиспользованный остаток
+--		_n_normative_cost NUMERIC; -- нормативные расходы
+	
+		-- нормативные расходы
+		SELECT sum(COALESCE(p.n_normative, 0) * COALESCE(p.n_tarif, 0) * COALESCE(_count_location, 0))
+		INTO _n_normative_cost
+		FROM subsidy.cd_cases_ghku_periods AS p
+		INNER JOIN subsidy.cs_ghku_types AS t ON p.f_type = t.id
+		WHERE p.f_case_ghku = _n_last_ghku
+			  AND (t.c_code LIKE '30%' OR t.c_code LIKE '31%' OR
+			 	   t.c_code LIKE '33%' OR t.c_code LIKE '34%' OR
+			 	   t.c_code LIKE '35%' OR t.c_code LIKE '39%');
+			 	  
+		-- годовой объём твёрдого топлива по нормативу
+		_n_annual_volume := LEAST(rec._n_area, _n_republic_area) * _n_normative_year;
+		
+		-- кол-во месяцев по нормативу
+		IF _n_annual_volume != 0 THEN
+			_n_months := (_n_volume * 12) / _n_annual_volume;
+		END IF;
+		
+		-- размер фактических расходов на оплату ТТ
+		IF _n_prev_annual_volume_sf != 0 THEN
+			_n_fact_payment_year := _n_fact_payment_year + (_n_prev_fact_payment / _n_prev_annual_volume_sf::NUMERIC) * _n_prev_rest_volume;
+		END IF;
+	
+		IF _n_months != 0 THEN 
+			-- размер среднемесячных расходов на оплату ТТ
+			_n_fact_payment_month := _n_fact_payment_year / _n_months;
+			
+			-- неиспользованный остаток ТТ
+			_n_rest_volume := _n_volume - (_n_volume / _n_months) * 6;
+		ELSE
+			-- размер среднемесячных расходов на оплату ТТ
+			_n_fact_payment_month := 0;
+			
+			-- неиспользованный остаток ТТ
+			_n_rest_volume := _n_volume;
+		END IF;
+		
 
 		--======================================================================--
 		--                 ЗАПИСЫВАЕМ РЕЗУЛЬТАТЫ РАСЧЁТА                        -- 
@@ -602,3 +745,4 @@ BEGIN
 	
 END
 $function$
+;
